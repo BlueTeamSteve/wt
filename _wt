@@ -41,6 +41,8 @@ _wt() {
     'rm:Remove worktree and delete branch'
     'remove:Remove worktree (alias for rm)'
     'done:Merge PR, delete branch, cleanup worktree'
+    'version:Show version number'
+    'v:Show version (alias for version)'
   )
 
   _arguments -C \

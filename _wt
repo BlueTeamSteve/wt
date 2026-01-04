@@ -1,0 +1,77 @@
+#compdef wt
+
+# Completion for wt - Git Worktree + Claude workflow
+
+_wt_worktrees() {
+  local wt_dir="${WT_DIR:-$HOME/coding/worktrees}"
+  local -a worktrees
+
+  if [[ -d "$wt_dir" ]]; then
+    for wt in "$wt_dir"/*(-/N); do
+      if [[ -d "$wt/.git" || -f "$wt/.git" ]]; then
+        local name=$(basename "$wt")
+        # Extract just the branch part (after repo-name-)
+        local branch="${name#*-}"
+        worktrees+=("$branch")
+      fi
+    done
+  fi
+
+  _describe 'worktree' worktrees
+}
+
+_wt_branches() {
+  local -a branches
+  branches=(${${(f)"$(git branch -a 2>/dev/null)"}##[* ] })
+  branches=(${branches//remotes\/origin\//})
+  _describe 'branch' branches
+}
+
+_wt() {
+  local -a commands
+  commands=(
+    'new:Create worktree, install deps, launch Claude'
+    'n:Create worktree (alias for new)'
+    'go:Switch to existing worktree'
+    'g:Switch to worktree (alias for go)'
+    'list:List all worktrees'
+    'l:List worktrees (alias for list)'
+    'ls:List worktrees (alias for list)'
+    'pr:Push branch and create PR'
+    'rm:Remove worktree and delete branch'
+    'remove:Remove worktree (alias for rm)'
+    'done:Merge PR, delete branch, cleanup worktree'
+  )
+
+  _arguments -C \
+    '1: :->command' \
+    '*: :->args'
+
+  case "$state" in
+    command)
+      _describe 'command' commands
+      ;;
+    args)
+      case "$words[2]" in
+        n|new)
+          case "$CURRENT" in
+            3)
+              _message 'branch name'
+              ;;
+            4)
+              _wt_branches
+              ;;
+          esac
+          ;;
+        g|go|rm|remove)
+          _wt_worktrees
+          ;;
+        pr)
+          _message 'PR title (optional)'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_wt "$@"

@@ -7,18 +7,22 @@
 # Configuration (add to .zshrc before plugins are loaded):
 #   export WT_DIR="$HOME/coding/worktrees"
 
+# Version
+WT_VERSION="0.1.0"
+
 # Configuration with default
 : ${WT_DIR:="$HOME/coding/worktrees"}
 
 wt() {
   case "$1" in
-    n|new)     _wt_new "${@:2}" ;;
-    g|go)      _wt_go "${@:2}" ;;
-    l|ls|list) _wt_list ;;
-    pr)        _wt_pr "${@:2}" ;;
-    rm|remove) _wt_rm "${@:2}" ;;
-    done)      _wt_done ;;
-    *)         _wt_help ;;
+    n|new)       _wt_new "${@:2}" ;;
+    g|go)        _wt_go "${@:2}" ;;
+    l|ls|list)   _wt_list ;;
+    pr)          _wt_pr "${@:2}" ;;
+    rm|remove)   _wt_rm "${@:2}" ;;
+    done)        _wt_done ;;
+    v|version)   _wt_version ;;
+    *)           _wt_help ;;
   esac
 }
 
@@ -342,9 +346,13 @@ _wt_done() {
   fi
 }
 
+_wt_version() {
+  echo "wt version $WT_VERSION"
+}
+
 _wt_help() {
+  echo "wt - Git Worktree + Claude workflow (v$WT_VERSION)"
   cat << 'EOF'
-wt - Git Worktree + Claude workflow
 
 Commands:
   wt new <name> [base]   Create worktree, install deps, launch Claude
@@ -363,6 +371,9 @@ Commands:
   wt rm <name>           Remove worktree and delete branch
 
   wt done                Merge PR, delete branch, cleanup worktree
+
+  wt version             Show version number
+                         Alias: wt v
 
 Configuration:
   WT_DIR                 Where worktrees are created

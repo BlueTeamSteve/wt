@@ -161,13 +161,41 @@ _wt_pr() {
     base="master"
   fi
 
-  echo "🤖 Generating PR with Claude..."
+  # Check for uncommitted changes
+  local has_staged=$(git diff --cached --quiet; echo $?)
+  local has_unstaged=$(git diff --quiet; echo $?)
+
+  if [[ "$has_staged" -ne 0 || "$has_unstaged" -ne 0 ]]; then
+    echo "📝 Committing uncommitted changes..."
+
+    # Stage everything
+    git add -A
+
+    # Get diff for commit message
+    local diff_for_commit=$(git diff --cached --stat)
+
+    local commit_prompt="Generate a concise git commit message for these changes:
+
+$diff_for_commit
+
+Output only the commit message, no explanation. Max 72 chars for first line."
+
+    local commit_msg=$(echo "$commit_prompt" | claude -p 2>/dev/null)
+
+    if [[ -z "$commit_msg" ]]; then
+      echo "❌ Claude unavailable"
+      return 1
+    fi
+
+    git commit -m "$commit_msg" || return 1
+    echo "✓ Committed: $commit_msg"
+  fi
+
+  echo "\n🤖 Generating PR with Claude..."
 
   # Gather context for Claude
   local commits=$(git log --oneline "$base"..HEAD 2>/dev/null)
   local diff_stat=$(git diff --stat "$base"..HEAD 2>/dev/null)
-  local staged=$(git diff --cached --stat 2>/dev/null)
-  local unstaged=$(git diff --stat 2>/dev/null)
 
   # Build context
   local context="Branch: $branch
@@ -177,20 +205,6 @@ $commits
 
 Changes from $base:
 $diff_stat"
-
-  if [[ -n "$staged" ]]; then
-    context="$context
-
-Staged changes (not yet committed):
-$staged"
-  fi
-
-  if [[ -n "$unstaged" ]]; then
-    context="$context
-
-Unstaged changes:
-$unstaged"
-  fi
 
   # Generate PR title and body with Claude
   local prompt="Generate a GitHub PR title and body for this branch.

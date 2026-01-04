@@ -303,9 +303,15 @@ _wt_done() {
 
   echo "🔄 Merging PR for $branch..."
 
-  if gh pr merge --squash --delete-branch; then
+  # Don't use --delete-branch as it tries to checkout main (fails with worktrees)
+  if gh pr merge --squash; then
     echo "✅ PR merged!"
 
+    # Delete remote branch manually
+    echo "🗑️  Deleting remote branch..."
+    git push origin --delete "$branch" 2>/dev/null || true
+
+    # Switch to main worktree
     local main_wt=$(git worktree list | grep -E '\[(main|master)\]' | awk '{print $1}')
     if [[ -n "$main_wt" ]]; then
       cd "$main_wt"
@@ -313,10 +319,14 @@ _wt_done() {
       git pull
     fi
 
+    # Remove the feature worktree
     if [[ -d "$current_wt" && "$current_wt" != "$main_wt" ]]; then
       echo "🗑️  Removing worktree: $current_wt"
       git worktree remove "$current_wt" --force 2>/dev/null
     fi
+
+    # Delete local branch
+    git branch -D "$branch" 2>/dev/null || true
 
     echo "\n🎉 Done! Branch merged and cleaned up."
   else

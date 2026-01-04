@@ -47,6 +47,13 @@ _wt_new() {
 
   cd "$wt_path" || return 1
 
+  # Copy Claude settings from source repo
+  if [[ -f "$repo_root/.claude/settings.local.json" ]]; then
+    mkdir -p ".claude"
+    cp "$repo_root/.claude/settings.local.json" ".claude/"
+    echo "✓ Copied Claude settings"
+  fi
+
   _wt_setup_deps
 
   echo "\n🤖 Launching Claude..."

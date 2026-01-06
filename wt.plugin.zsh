@@ -58,6 +58,22 @@ _wt_new() {
     echo "✓ Copied Claude settings"
   fi
 
+  # Copy .env files from source repo (these are typically gitignored)
+  # Searches root and all subdirectories, preserving relative paths
+  local env_copied=0
+  while IFS= read -r env_file; do
+    local rel_path="${env_file#$repo_root/}"
+    local target_dir=$(dirname "$rel_path")
+    if [[ "$target_dir" != "." ]]; then
+      mkdir -p "$target_dir"
+    fi
+    cp "$env_file" "$rel_path"
+    ((env_copied++))
+  done < <(find "$repo_root" -name '.env*' -type f ! -path '*/node_modules/*' ! -path '*/.git/*' 2>/dev/null)
+  if [[ $env_copied -gt 0 ]]; then
+    echo "✓ Copied $env_copied .env file(s)"
+  fi
+
   _wt_setup_deps
 
   echo "\n🤖 Launching Claude..."

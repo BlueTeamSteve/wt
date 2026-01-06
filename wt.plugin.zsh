@@ -113,39 +113,24 @@ _wt_go() {
     return 1
   fi
 
-  local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
-  local repo_name=""
-
-  if [[ -n "$repo_root" ]]; then
-    repo_name=$(basename "$repo_root")
-    repo_name="${repo_name%%-*}"
-  fi
-
+  local repo_name=$(_wt_get_repo_name)
   local wt_path="${WT_DIR}/${repo_name}-${name}"
 
-  if [[ -d "$wt_path" ]]; then
-    cd "$wt_path"
-    echo "📂 Switched to: $wt_path"
-
-    if [[ -f ".venv/bin/activate" ]]; then
-      source .venv/bin/activate
-      echo "✓ Activated .venv"
-    fi
-  else
-    local found=$(find "$WT_DIR" -maxdepth 1 -type d -name "*-${name}" 2>/dev/null | head -1)
-    if [[ -n "$found" ]]; then
-      cd "$found"
-      echo "📂 Switched to: $found"
-      if [[ -f ".venv/bin/activate" ]]; then
-        source .venv/bin/activate
-      fi
-    else
-      echo "Error: Worktree '$name' not found"
-      echo "\nAvailable worktrees:"
-      _wt_list
-      return 1
-    fi
+  if [[ ! -d "$wt_path" ]]; then
+    # Fallback: fuzzy match by branch suffix
+    wt_path=$(find "$WT_DIR" -maxdepth 1 -type d -name "*-${name}" 2>/dev/null | head -1)
   fi
+
+  if [[ -z "$wt_path" || ! -d "$wt_path" ]]; then
+    echo "Error: Worktree '$name' not found"
+    echo "\nAvailable worktrees:"
+    _wt_list
+    return 1
+  fi
+
+  cd "$wt_path"
+  echo "📂 Switched to: $wt_path"
+  _wt_activate_venv
 }
 
 _wt_list() {
@@ -182,49 +167,86 @@ _wt_pr() {
 
   local branch=$(git branch --show-current)
 
-  # Find base branch (main or master)
-  local base="main"
-  if ! git rev-parse --verify main &>/dev/null; then
-    base="master"
-  fi
+  _wt_auto_commit || return 1
 
-  # Check for uncommitted changes
+  echo "📤 Pushing $branch..."
+  git push -u origin "$branch" || return 1
+
+  _wt_create_pr "$branch"
+}
+
+# ============================================================================
+# Shared Helper Functions
+# ============================================================================
+
+# Get the base branch (main or master)
+_wt_get_base_branch() {
+  git rev-parse --verify main &>/dev/null && echo "main" || echo "master"
+}
+
+# Get repo name from current git root
+# Strips any worktree suffix (e.g., "repo-branch" -> "repo")
+_wt_get_repo_name() {
+  local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [[ -n "$repo_root" ]]; then
+    local name=$(basename "$repo_root")
+    echo "${name%%-*}"
+  fi
+}
+
+# Activate Python venv if it exists
+_wt_activate_venv() {
+  if [[ -f ".venv/bin/activate" ]]; then
+    source .venv/bin/activate
+    echo "✓ Activated .venv"
+  fi
+}
+
+# Stage and commit changes with Claude-generated message
+# Args: $1 = fallback message (optional, defaults to "WIP changes")
+# Returns: 0 if committed or nothing to commit, 1 on error
+_wt_auto_commit() {
+  local fallback="${1:-WIP changes}"
+
   local has_staged=$(git diff --cached --quiet; echo $?)
   local has_unstaged=$(git diff --quiet; echo $?)
+  local has_untracked=$(git ls-files --others --exclude-standard | head -1)
 
-  if [[ "$has_staged" -ne 0 || "$has_unstaged" -ne 0 ]]; then
-    echo "📝 Committing uncommitted changes..."
+  if [[ "$has_staged" -eq 0 && "$has_unstaged" -eq 0 && -z "$has_untracked" ]]; then
+    return 0  # Nothing to commit
+  fi
 
-    # Stage everything
-    git add -A
+  echo "📝 Committing uncommitted changes..."
+  git add -A
 
-    # Get diff for commit message
-    local diff_for_commit=$(git diff --cached --stat)
-
-    local commit_prompt="Generate a concise git commit message for these changes:
+  local diff_for_commit=$(git diff --cached --stat)
+  local commit_prompt="Generate a concise git commit message for these changes:
 
 $diff_for_commit
 
 Output only the commit message, no explanation. Max 72 chars for first line."
 
-    local commit_msg=$(echo "$commit_prompt" | claude -p 2>/dev/null)
-
-    if [[ -z "$commit_msg" ]]; then
-      echo "❌ Claude unavailable"
-      return 1
-    fi
-
-    git commit -m "$commit_msg" || return 1
-    echo "✓ Committed: $commit_msg"
+  local commit_msg=$(echo "$commit_prompt" | claude -p 2>/dev/null)
+  if [[ -z "$commit_msg" ]]; then
+    commit_msg="$fallback"
   fi
+
+  git commit -m "$commit_msg" || return 1
+  echo "✓ Committed: $commit_msg"
+}
+
+# Create PR with Claude-generated title and body
+# Args: $1 = branch name
+# Returns: 0 on success, 1 on error
+_wt_create_pr() {
+  local branch="$1"
+  local base=$(_wt_get_base_branch)
 
   echo "\n🤖 Generating PR with Claude..."
 
-  # Gather context for Claude
   local commits=$(git log --oneline "$base"..HEAD 2>/dev/null)
   local diff_stat=$(git diff --stat "$base"..HEAD 2>/dev/null)
 
-  # Build context
   local context="Branch: $branch
 
 Commits:
@@ -233,7 +255,6 @@ $commits
 Changes from $base:
 $diff_stat"
 
-  # Generate PR title and body with Claude
   local prompt="Generate a GitHub PR title and body for this branch.
 
 $context
@@ -252,7 +273,6 @@ Be concise and focus on what changed and why."
     return 1
   fi
 
-  # Parse title and body from Claude's response
   local pr_title=$(echo "$result" | grep -E "^TITLE:" | sed 's/^TITLE:[[:space:]]*//')
   local pr_body=$(echo "$result" | sed -n '/^BODY:/,$ p' | tail -n +2)
 
@@ -260,18 +280,11 @@ Be concise and focus on what changed and why."
     pr_title="$branch"
   fi
 
-  echo "📤 Pushing $branch..."
-  git push -u origin "$branch" || return 1
-
-  echo "\n🔗 Creating PR..."
+  echo "🔗 Creating PR..."
   echo "   Title: $pr_title"
 
   gh pr create --title "$pr_title" --body "$pr_body"
 }
-
-# ============================================================================
-# Shared Helper Functions (used by rm and done)
-# ============================================================================
 
 # Get worktree info from current directory or branch name argument
 # Sets: _wt_branch, _wt_path
@@ -296,13 +309,7 @@ _wt_get_worktree_info() {
     fi
   else
     # Find by branch name
-    local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
-    local repo_name=""
-    if [[ -n "$repo_root" ]]; then
-      repo_name=$(basename "$repo_root")
-      repo_name="${repo_name%%-*}"
-    fi
-
+    local repo_name=$(_wt_get_repo_name)
     _wt_path="${WT_DIR}/${repo_name}-${name}"
     if [[ ! -d "$_wt_path" ]]; then
       _wt_path=$(find "$WT_DIR" -maxdepth 1 -type d -name "*-${name}" 2>/dev/null | head -1)
@@ -381,8 +388,7 @@ _wt_has_dirty_state() {
     [[ "$unpushed_count" -gt 0 ]] && has_unpushed=1
   else
     # No upstream, check if there are any commits not on main
-    local base="main"
-    git rev-parse --verify main &>/dev/null || base="master"
+    local base=$(_wt_get_base_branch)
     local unpushed_count=$(git rev-list --count "$base"..HEAD 2>/dev/null)
     [[ "$unpushed_count" -gt 0 ]] && has_unpushed=1
   fi
@@ -473,34 +479,7 @@ _wt_done() {
     return 1
   fi
 
-  # Find base branch
-  local base="main"
-  git rev-parse --verify main &>/dev/null || base="master"
-
-  # Stage and commit any uncommitted changes
-  local has_staged=$(git diff --cached --quiet; echo $?)
-  local has_unstaged=$(git diff --quiet; echo $?)
-  local has_untracked=$(git ls-files --others --exclude-standard | head -1)
-
-  if [[ "$has_staged" -ne 0 || "$has_unstaged" -ne 0 || -n "$has_untracked" ]]; then
-    echo "📝 Committing uncommitted changes..."
-    git add -A
-
-    local diff_for_commit=$(git diff --cached --stat)
-    local commit_prompt="Generate a concise git commit message for these changes:
-
-$diff_for_commit
-
-Output only the commit message, no explanation. Max 72 chars for first line."
-
-    local commit_msg=$(echo "$commit_prompt" | claude -p 2>/dev/null)
-    if [[ -z "$commit_msg" ]]; then
-      commit_msg="WIP changes"
-    fi
-
-    git commit -m "$commit_msg" || return 1
-    echo "✓ Committed: $commit_msg"
-  fi
+  _wt_auto_commit || return 1
 
   # Push to remote
   echo "📤 Pushing $branch..."
@@ -508,41 +487,7 @@ Output only the commit message, no explanation. Max 72 chars for first line."
 
   # Check if PR exists, create if not
   if ! gh pr view "$branch" &>/dev/null; then
-    echo "\n🔗 Creating PR..."
-
-    local commits=$(git log --oneline "$base"..HEAD 2>/dev/null)
-    local diff_stat=$(git diff --stat "$base"..HEAD 2>/dev/null)
-
-    local context="Branch: $branch
-
-Commits:
-$commits
-
-Changes from $base:
-$diff_stat"
-
-    local prompt="Generate a GitHub PR title and body for this branch.
-
-$context
-
-Output format (exactly):
-TITLE: <concise title, max 72 chars, no prefix like 'feat:'>
-BODY:
-<2-4 bullet points summarizing the changes>
-
-Be concise and focus on what changed and why."
-
-    local result=$(echo "$prompt" | claude -p 2>/dev/null)
-
-    local pr_title=$(echo "$result" | grep -E "^TITLE:" | sed 's/^TITLE:[[:space:]]*//')
-    local pr_body=$(echo "$result" | sed -n '/^BODY:/,$ p' | tail -n +2)
-
-    if [[ -z "$pr_title" ]]; then
-      pr_title="$branch"
-    fi
-
-    echo "   Title: $pr_title"
-    gh pr create --title "$pr_title" --body "$pr_body" || return 1
+    _wt_create_pr "$branch" || return 1
   else
     echo "✓ PR already exists"
   fi

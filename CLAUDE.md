@@ -16,7 +16,7 @@ Oh My Zsh plugin for managing git worktrees with Claude integration.
 | `wt go <name>` | `wt g` | cd into existing worktree |
 | `wt list` | `wt l` | List all worktrees |
 | `wt pr [title]` | - | Push and create PR via gh |
-| `wt rm <name>` | - | Remove worktree + branch |
+| `wt rm [name]` | - | Remove worktree + branch (auto-detects if inside worktree) |
 | `wt done` | - | Merge PR + cleanup |
 
 ## Config

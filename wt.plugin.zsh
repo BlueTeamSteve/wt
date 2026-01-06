@@ -271,21 +271,36 @@ Be concise and focus on what changed and why."
 
 _wt_rm() {
   local name="$1"
+  local wt_path=""
 
+  # If no name provided, try to detect current worktree
   if [[ -z "$name" ]]; then
-    echo "Usage: wt rm <branch-name>"
-    return 1
+    local current=$(pwd)
+    # Check if we're inside a worktree in WT_DIR
+    if [[ "$current" == "$WT_DIR"/* ]]; then
+      # Extract the worktree directory (first level under WT_DIR)
+      local wt_dir_name="${current#$WT_DIR/}"
+      wt_dir_name="${wt_dir_name%%/*}"
+      wt_path="${WT_DIR}/${wt_dir_name}"
+      # Extract branch name (everything after first dash, i.e., repo-branch -> branch)
+      name="${wt_dir_name#*-}"
+      echo "📍 Detected current worktree: $name"
+    else
+      echo "Usage: wt rm [branch-name]"
+      echo "  (run inside a worktree to auto-detect, or specify branch name)"
+      return 1
+    fi
+  else
+    local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+    local repo_name=""
+
+    if [[ -n "$repo_root" ]]; then
+      repo_name=$(basename "$repo_root")
+      repo_name="${repo_name%%-*}"
+    fi
+
+    wt_path="${WT_DIR}/${repo_name}-${name}"
   fi
-
-  local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
-  local repo_name=""
-
-  if [[ -n "$repo_root" ]]; then
-    repo_name=$(basename "$repo_root")
-    repo_name="${repo_name%%-*}"
-  fi
-
-  local wt_path="${WT_DIR}/${repo_name}-${name}"
 
   if [[ ! -d "$wt_path" ]]; then
     wt_path=$(find "$WT_DIR" -maxdepth 1 -type d -name "*-${name}" 2>/dev/null | head -1)
@@ -384,7 +399,8 @@ Commands:
   wt pr [title]          Push branch and create PR
                          Auto-fills from commits if no title
 
-  wt rm <name>           Remove worktree and delete branch
+  wt rm [name]           Remove worktree and delete branch
+                         Auto-detects current worktree if inside one
 
   wt done                Merge PR, delete branch, cleanup worktree
 

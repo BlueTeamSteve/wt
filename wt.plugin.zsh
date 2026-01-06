@@ -59,14 +59,17 @@ _wt_new() {
   fi
 
   # Copy .env files from source repo (these are typically gitignored)
+  # Searches root and all subdirectories, preserving relative paths
   local env_copied=0
-  for env_file in "$repo_root"/.env*; do
-    if [[ -f "$env_file" ]]; then
-      local filename=$(basename "$env_file")
-      cp "$env_file" "./$filename"
-      ((env_copied++))
+  while IFS= read -r env_file; do
+    local rel_path="${env_file#$repo_root/}"
+    local target_dir=$(dirname "$rel_path")
+    if [[ "$target_dir" != "." ]]; then
+      mkdir -p "$target_dir"
     fi
-  done
+    cp "$env_file" "$rel_path"
+    ((env_copied++))
+  done < <(find "$repo_root" -name '.env*' -type f ! -path '*/node_modules/*' ! -path '*/.git/*' 2>/dev/null)
   if [[ $env_copied -gt 0 ]]; then
     echo "✓ Copied $env_copied .env file(s)"
   fi

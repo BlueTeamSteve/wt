@@ -65,8 +65,14 @@ _wt() {
               ;;
           esac
           ;;
-        g|go|rm|remove)
+        g|go)
           _wt_worktrees
+          ;;
+        rm|remove)
+          _arguments \
+            '-f[Discard uncommitted/unpushed changes, delete remote branch]' \
+            '--force[Discard uncommitted/unpushed changes, delete remote branch]' \
+            '1:worktree:_wt_worktrees'
           ;;
         pr)
           _message 'PR title (optional)'

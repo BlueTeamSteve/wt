@@ -269,112 +269,303 @@ Be concise and focus on what changed and why."
   gh pr create --title "$pr_title" --body "$pr_body"
 }
 
-_wt_rm() {
-  local name="$1"
-  local wt_path=""
+# ============================================================================
+# Shared Helper Functions (used by rm and done)
+# ============================================================================
 
-  # If no name provided, try to detect current worktree
+# Get worktree info from current directory or branch name argument
+# Sets: _wt_branch, _wt_path
+# Returns: 0 on success, 1 on failure
+_wt_get_worktree_info() {
+  local name="$1"
+  _wt_branch=""
+  _wt_path=""
+
   if [[ -z "$name" ]]; then
+    # Auto-detect from current directory
     local current=$(pwd)
-    # Check if we're inside a worktree in WT_DIR
     if [[ "$current" == "$WT_DIR"/* ]]; then
-      # Extract the worktree directory (first level under WT_DIR)
       local wt_dir_name="${current#$WT_DIR/}"
       wt_dir_name="${wt_dir_name%%/*}"
-      wt_path="${WT_DIR}/${wt_dir_name}"
-      # Extract branch name (everything after first dash, i.e., repo-branch -> branch)
-      name="${wt_dir_name#*-}"
-      echo "📍 Detected current worktree: $name"
+      _wt_path="${WT_DIR}/${wt_dir_name}"
+      _wt_branch="${wt_dir_name#*-}"
+      echo "📍 Detected worktree: $_wt_branch"
+      return 0
     else
-      echo "Usage: wt rm [branch-name]"
-      echo "  (run inside a worktree to auto-detect, or specify branch name)"
       return 1
     fi
   else
+    # Find by branch name
     local repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
     local repo_name=""
-
     if [[ -n "$repo_root" ]]; then
       repo_name=$(basename "$repo_root")
       repo_name="${repo_name%%-*}"
     fi
 
-    wt_path="${WT_DIR}/${repo_name}-${name}"
+    _wt_path="${WT_DIR}/${repo_name}-${name}"
+    if [[ ! -d "$_wt_path" ]]; then
+      _wt_path=$(find "$WT_DIR" -maxdepth 1 -type d -name "*-${name}" 2>/dev/null | head -1)
+    fi
+
+    if [[ -z "$_wt_path" || ! -d "$_wt_path" ]]; then
+      echo "Error: Worktree '$name' not found"
+      return 1
+    fi
+
+    _wt_branch="$name"
+    return 0
+  fi
+}
+
+# Switch to main/master worktree
+# Returns: 0 on success, 1 on failure
+_wt_switch_to_main() {
+  local main_wt=$(git worktree list | grep -E '\[(main|master)\]' | awk '{print $1}')
+  if [[ -n "$main_wt" ]]; then
+    cd "$main_wt"
+    echo "📍 Switched to: $main_wt"
+    return 0
+  else
+    # Fallback: first worktree that isn't current
+    main_wt=$(git worktree list | head -1 | awk '{print $1}')
+    if [[ -n "$main_wt" ]]; then
+      cd "$main_wt"
+      echo "📍 Switched to: $main_wt"
+      return 0
+    fi
+    cd "$HOME"
+    return 1
+  fi
+}
+
+# Remove worktree and delete local branch
+# Args: $1 = worktree path, $2 = branch name
+_wt_cleanup_local() {
+  local wt_path="$1"
+  local branch="$2"
+
+  if [[ -d "$wt_path" ]]; then
+    echo "🗑️  Removing worktree: $wt_path"
+    git worktree remove "$wt_path" --force 2>/dev/null
   fi
 
-  if [[ ! -d "$wt_path" ]]; then
-    wt_path=$(find "$WT_DIR" -maxdepth 1 -type d -name "*-${name}" 2>/dev/null | head -1)
+  echo "🌿 Deleting local branch: $branch"
+  git branch -D "$branch" 2>/dev/null || echo "  (branch already deleted or merged)"
+}
+
+# Delete remote branch if it exists
+# Args: $1 = branch name
+_wt_delete_remote_branch() {
+  local branch="$1"
+
+  # Check if remote branch exists
+  if git ls-remote --heads origin "$branch" 2>/dev/null | grep -q "$branch"; then
+    echo "🗑️  Deleting remote branch: $branch"
+    git push origin --delete "$branch" 2>/dev/null || true
+  fi
+}
+
+# Check for uncommitted, staged, or unpushed changes
+# Returns: 0 if dirty, 1 if clean
+_wt_has_dirty_state() {
+  local has_staged=$(git diff --cached --quiet 2>/dev/null; echo $?)
+  local has_unstaged=$(git diff --quiet 2>/dev/null; echo $?)
+  local has_untracked=$(git ls-files --others --exclude-standard 2>/dev/null | head -1)
+
+  # Check for unpushed commits
+  local upstream=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
+  local has_unpushed=0
+  if [[ -n "$upstream" ]]; then
+    local unpushed_count=$(git rev-list --count @{upstream}..HEAD 2>/dev/null)
+    [[ "$unpushed_count" -gt 0 ]] && has_unpushed=1
+  else
+    # No upstream, check if there are any commits not on main
+    local base="main"
+    git rev-parse --verify main &>/dev/null || base="master"
+    local unpushed_count=$(git rev-list --count "$base"..HEAD 2>/dev/null)
+    [[ "$unpushed_count" -gt 0 ]] && has_unpushed=1
   fi
 
-  if [[ -z "$wt_path" || ! -d "$wt_path" ]]; then
-    echo "Error: Worktree '$name' not found"
+  if [[ "$has_staged" -ne 0 || "$has_unstaged" -ne 0 || -n "$has_untracked" ]]; then
+    echo "⚠️  Uncommitted changes detected"
+    return 0
+  fi
+
+  if [[ "$has_unpushed" -eq 1 ]]; then
+    echo "⚠️  Unpushed commits detected"
+    return 0
+  fi
+
+  return 1
+}
+
+# ============================================================================
+# Main Functions
+# ============================================================================
+
+_wt_rm() {
+  local force=0
+  local name=""
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--force) force=1; shift ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+
+  # Get worktree info
+  if ! _wt_get_worktree_info "$name"; then
+    echo "Usage: wt rm [branch-name] [--force]"
+    echo "  (run inside a worktree to auto-detect, or specify branch name)"
     return 1
   fi
 
-  local current=$(pwd)
-  if [[ "$current" == "$wt_path"* ]]; then
-    echo "📍 Returning to main repo..."
-    local main_wt=$(git worktree list | grep -v "$wt_path" | head -1 | awk '{print $1}')
-    if [[ -n "$main_wt" ]]; then
-      cd "$main_wt"
-    else
-      cd "$HOME"
+  local wt_path="$_wt_path"
+  local branch="$_wt_branch"
+
+  # Check dirty state (unless --force)
+  if [[ $force -eq 0 ]]; then
+    # Need to be in the worktree to check its state
+    local original_dir=$(pwd)
+    cd "$wt_path" 2>/dev/null
+
+    if _wt_has_dirty_state; then
+      echo -n "Continue anyway? [y/N] "
+      read -r response
+      if [[ ! "$response" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        cd "$original_dir"
+        return 1
+      fi
     fi
   fi
 
-  echo "🗑️  Removing worktree: $wt_path"
-  git worktree remove "$wt_path" --force
+  # Switch to main if we're in the worktree being removed
+  local current=$(pwd)
+  if [[ "$current" == "$wt_path"* ]]; then
+    _wt_switch_to_main
+  fi
 
-  echo "🌿 Deleting branch: $name"
-  git branch -D "$name" 2>/dev/null || echo "  (branch may have been merged)"
+  # Delete remote branch if --force
+  if [[ $force -eq 1 ]]; then
+    _wt_delete_remote_branch "$branch"
+  fi
+
+  # Cleanup local worktree and branch
+  _wt_cleanup_local "$wt_path" "$branch"
 }
 
 _wt_done() {
-  if ! git rev-parse --git-dir &>/dev/null; then
-    echo "Error: Not in a git repository"
+  # Must be run from inside a worktree
+  if ! _wt_get_worktree_info; then
+    echo "Error: Must be run from inside a worktree"
     return 1
   fi
 
-  local branch=$(git branch --show-current)
-  local current_wt=$(pwd)
+  local wt_path="$_wt_path"
+  local branch="$_wt_branch"
 
   if [[ "$branch" == "main" || "$branch" == "master" ]]; then
     echo "Error: Already on $branch, nothing to merge"
     return 1
   fi
 
-  echo "🔄 Merging PR for $branch..."
+  # Find base branch
+  local base="main"
+  git rev-parse --verify main &>/dev/null || base="master"
 
-  # Don't use --delete-branch as it tries to checkout main (fails with worktrees)
-  if gh pr merge --squash; then
-    echo "✅ PR merged!"
+  # Stage and commit any uncommitted changes
+  local has_staged=$(git diff --cached --quiet; echo $?)
+  local has_unstaged=$(git diff --quiet; echo $?)
+  local has_untracked=$(git ls-files --others --exclude-standard | head -1)
 
-    # Delete remote branch manually
-    echo "🗑️  Deleting remote branch..."
-    git push origin --delete "$branch" 2>/dev/null || true
+  if [[ "$has_staged" -ne 0 || "$has_unstaged" -ne 0 || -n "$has_untracked" ]]; then
+    echo "📝 Committing uncommitted changes..."
+    git add -A
 
-    # Switch to main worktree
-    local main_wt=$(git worktree list | grep -E '\[(main|master)\]' | awk '{print $1}')
-    if [[ -n "$main_wt" ]]; then
-      cd "$main_wt"
-      echo "📍 Switched to: $main_wt"
-      git pull
+    local diff_for_commit=$(git diff --cached --stat)
+    local commit_prompt="Generate a concise git commit message for these changes:
+
+$diff_for_commit
+
+Output only the commit message, no explanation. Max 72 chars for first line."
+
+    local commit_msg=$(echo "$commit_prompt" | claude -p 2>/dev/null)
+    if [[ -z "$commit_msg" ]]; then
+      commit_msg="WIP changes"
     fi
 
-    # Remove the feature worktree
-    if [[ -d "$current_wt" && "$current_wt" != "$main_wt" ]]; then
-      echo "🗑️  Removing worktree: $current_wt"
-      git worktree remove "$current_wt" --force 2>/dev/null
+    git commit -m "$commit_msg" || return 1
+    echo "✓ Committed: $commit_msg"
+  fi
+
+  # Push to remote
+  echo "📤 Pushing $branch..."
+  git push -u origin "$branch" || return 1
+
+  # Check if PR exists, create if not
+  if ! gh pr view "$branch" &>/dev/null; then
+    echo "\n🔗 Creating PR..."
+
+    local commits=$(git log --oneline "$base"..HEAD 2>/dev/null)
+    local diff_stat=$(git diff --stat "$base"..HEAD 2>/dev/null)
+
+    local context="Branch: $branch
+
+Commits:
+$commits
+
+Changes from $base:
+$diff_stat"
+
+    local prompt="Generate a GitHub PR title and body for this branch.
+
+$context
+
+Output format (exactly):
+TITLE: <concise title, max 72 chars, no prefix like 'feat:'>
+BODY:
+<2-4 bullet points summarizing the changes>
+
+Be concise and focus on what changed and why."
+
+    local result=$(echo "$prompt" | claude -p 2>/dev/null)
+
+    local pr_title=$(echo "$result" | grep -E "^TITLE:" | sed 's/^TITLE:[[:space:]]*//')
+    local pr_body=$(echo "$result" | sed -n '/^BODY:/,$ p' | tail -n +2)
+
+    if [[ -z "$pr_title" ]]; then
+      pr_title="$branch"
     fi
 
-    # Delete local branch
-    git branch -D "$branch" 2>/dev/null || true
-
-    echo "\n🎉 Done! Branch merged and cleaned up."
+    echo "   Title: $pr_title"
+    gh pr create --title "$pr_title" --body "$pr_body" || return 1
   else
+    echo "✓ PR already exists"
+  fi
+
+  # Merge the PR
+  echo "\n🔄 Merging PR for $branch..."
+  if ! gh pr merge --squash; then
     echo "❌ PR merge failed. Check the PR status with: gh pr view"
     return 1
   fi
+  echo "✅ PR merged!"
+
+  # Delete remote branch
+  _wt_delete_remote_branch "$branch"
+
+  # Switch to main worktree
+  _wt_switch_to_main
+  git pull
+
+  # Cleanup local worktree and branch
+  _wt_cleanup_local "$wt_path" "$branch"
+
+  echo "\n🎉 Done! Branch merged and cleaned up."
 }
 
 _wt_version() {
@@ -399,10 +590,13 @@ Commands:
   wt pr [title]          Push branch and create PR
                          Auto-fills from commits if no title
 
-  wt rm [name]           Remove worktree and delete branch
+  wt rm [name] [-f]      Remove worktree and delete branch
                          Auto-detects current worktree if inside one
+                         -f/--force: discard uncommitted/unpushed changes,
+                                     delete remote branch
 
-  wt done                Merge PR, delete branch, cleanup worktree
+  wt done                Stage, commit, push, create PR (if needed),
+                         merge PR, and cleanup worktree
 
   wt version             Show version number
                          Alias: wt v

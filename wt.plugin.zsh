@@ -58,6 +58,19 @@ _wt_new() {
     echo "✓ Copied Claude settings"
   fi
 
+  # Copy .env files from source repo (these are typically gitignored)
+  local env_copied=0
+  for env_file in "$repo_root"/.env*; do
+    if [[ -f "$env_file" ]]; then
+      local filename=$(basename "$env_file")
+      cp "$env_file" "./$filename"
+      ((env_copied++))
+    fi
+  done
+  if [[ $env_copied -gt 0 ]]; then
+    echo "✓ Copied $env_copied .env file(s)"
+  fi
+
   _wt_setup_deps
 
   echo "\n🤖 Launching Claude..."

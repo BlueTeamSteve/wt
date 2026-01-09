@@ -53,6 +53,7 @@ _wt_new() {
 
   # Copy entire .claude folder from source repo
   if [[ -d "$repo_root/.claude" ]]; then
+    rm -rf ".claude"  # Remove first to prevent .claude/.claude nesting
     cp -r "$repo_root/.claude" ".claude"
     echo "✓ Copied .claude folder"
   fi

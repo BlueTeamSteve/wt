@@ -34,6 +34,8 @@ _wt() {
     'n:Create worktree (alias for new)'
     'go:Switch to existing worktree'
     'g:Switch to worktree (alias for go)'
+    'back:Switch back to main repo worktree'
+    'b:Switch back to main repo (alias for back)'
     'list:List all worktrees'
     'l:List worktrees (alias for list)'
     'ls:List worktrees (alias for list)'

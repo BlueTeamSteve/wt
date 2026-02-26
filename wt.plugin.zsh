@@ -20,6 +20,7 @@ wt() {
     l|ls|list)   _wt_list ;;
     pr)          _wt_pr "${@:2}" ;;
     rm|remove)   _wt_rm "${@:2}" ;;
+    b|back)      _wt_back ;;
     done)        _wt_done ;;
     v|version)   _wt_version ;;
     *)           _wt_help ;;
@@ -410,6 +411,15 @@ _wt_has_dirty_state() {
 # Main Functions
 # ============================================================================
 
+_wt_back() {
+  if ! git rev-parse --git-dir &>/dev/null; then
+    echo "Error: Not in a git repository"
+    return 1
+  fi
+
+  _wt_switch_to_main
+}
+
 _wt_rm() {
   local force=0
   local name=""
@@ -528,6 +538,9 @@ Commands:
 
   wt go <name>           Switch to existing worktree
                          Alias: wt g
+
+  wt back                Switch back to the main repo worktree
+                         Alias: wt b
 
   wt list                List all worktrees
                          Alias: wt l, wt ls

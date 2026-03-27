@@ -19,11 +19,13 @@ Oh My Zsh plugin for managing git worktrees with Claude integration.
 | `wt pr [title]` | - | Push and create PR via gh |
 | `wt rm [name]` | - | Remove worktree + branch (auto-detects if inside worktree) |
 | `wt done` | - | Merge PR + cleanup |
+| `wt update` | - | Update plugin to latest version |
 
 ## Config
 
 ```bash
 export WT_DIR="$HOME/coding/worktrees"  # Default worktree location
+export WT_AUTOUPDATE=0                  # Disable auto-update on shell load (default: enabled)
 ```
 
 ## Dev Notes

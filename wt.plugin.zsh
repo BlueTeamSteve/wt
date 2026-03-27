@@ -396,6 +396,7 @@ _wt_has_dirty_state() {
 
   if [[ "$has_staged" -ne 0 || "$has_unstaged" -ne 0 || -n "$has_untracked" ]]; then
     echo "⚠️  Uncommitted changes detected"
+    git status --short
     return 0
   fi
 

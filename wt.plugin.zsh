@@ -574,33 +574,21 @@ _wt_autoupdate() {
 
   local stamp_dir="${XDG_CACHE_HOME:-$HOME/.cache}/wt"
   local stamp_file="$stamp_dir/last_update"
-  local plugin_dir="$_WT_PLUGIN_DIR"
 
-  # Throttle to once per 24 hours
   if [[ -f "$stamp_file" ]]; then
     local last_update=$(< "$stamp_file")
     local now=$(date +%s)
     (( now - ${last_update:-0} < 86400 )) && return 0
   fi
 
-  # Record timestamp before fetching to prevent concurrent runs
+  # Write timestamp before spawning to prevent concurrent shell instances double-updating
   mkdir -p "$stamp_dir"
   date +%s >| "$stamp_file"
 
-  [[ ! -d "$plugin_dir/.git" ]] && return 0
-
-  # Run in background; only print if an update was applied
   {
-    if git -C "$plugin_dir" fetch --quiet origin 2>/dev/null; then
-      local current=$(git -C "$plugin_dir" rev-parse HEAD 2>/dev/null)
-      local upstream=$(git -C "$plugin_dir" rev-parse @{u} 2>/dev/null)
-      if [[ -n "$upstream" && "$current" != "$upstream" ]]; then
-        if git -C "$plugin_dir" merge --ff-only FETCH_HEAD &>/dev/null; then
-          local new_version=$(grep -m1 -E '^WT_VERSION=' "$plugin_dir/wt.plugin.zsh" | cut -d'"' -f2)
-          echo "✨ wt updated to v${new_version}! Reload with: source ~/.zshrc"
-        fi
-      fi
-    fi
+    local result
+    result=$(_wt_update 2>/dev/null)
+    [[ "$result" == *"✅"* ]] && echo "✨ ${result##*✅ }"
   } &!
 }
 
@@ -658,5 +646,4 @@ Examples:
 EOF
 }
 
-# Run autoupdate check on plugin load
 _wt_autoupdate

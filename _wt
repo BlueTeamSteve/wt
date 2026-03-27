@@ -43,6 +43,7 @@ _wt() {
     'rm:Remove worktree and delete branch'
     'remove:Remove worktree (alias for rm)'
     'done:Merge PR, delete branch, cleanup worktree'
+    'update:Update wt plugin to latest version'
     'version:Show version number'
     'v:Show version (alias for version)'
   )

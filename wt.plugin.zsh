@@ -10,8 +10,12 @@
 # Version
 WT_VERSION="0.1.0"
 
-# Configuration with default
+# Plugin source directory (resolved at load time, follows symlinks)
+_WT_PLUGIN_DIR="${0:A:h}"
+
+# Configuration with defaults
 : ${WT_DIR:="$HOME/coding/worktrees"}
+: ${WT_AUTOUPDATE:=1}
 
 wt() {
   case "$1" in
@@ -22,6 +26,7 @@ wt() {
     rm|remove)   _wt_rm "${@:2}" ;;
     b|back)      _wt_back ;;
     done)        _wt_done ;;
+    update)      _wt_update ;;
     v|version)   _wt_version ;;
     *)           _wt_help ;;
   esac
@@ -524,6 +529,69 @@ _wt_done() {
   echo "\n🎉 Done! Branch merged and cleaned up."
 }
 
+_wt_update() {
+  local plugin_dir="$_WT_PLUGIN_DIR"
+
+  if ! git -C "$plugin_dir" rev-parse --git-dir &>/dev/null; then
+    echo "Error: wt plugin directory is not a git repository"
+    return 1
+  fi
+
+  echo "🔄 Checking for updates..."
+
+  if ! git -C "$plugin_dir" fetch --quiet origin 2>/dev/null; then
+    echo "❌ Failed to reach remote"
+    return 1
+  fi
+
+  local current=$(git -C "$plugin_dir" rev-parse HEAD 2>/dev/null)
+  local upstream=$(git -C "$plugin_dir" rev-parse @{u} 2>/dev/null)
+
+  if [[ -z "$upstream" ]]; then
+    echo "❌ No upstream branch configured"
+    return 1
+  fi
+
+  if [[ "$current" == "$upstream" ]]; then
+    echo "✓ Already up to date (v$WT_VERSION)"
+    return 0
+  fi
+
+  # --ff-only: refuse non-fast-forward updates (no arbitrary merges)
+  if git -C "$plugin_dir" merge --ff-only FETCH_HEAD &>/dev/null; then
+    local new_version=$(grep -m1 -E '^WT_VERSION=' "$plugin_dir/wt.plugin.zsh" | cut -d'"' -f2)
+    echo "✅ Updated to v${new_version}! Reload with: source ~/.zshrc"
+  else
+    echo "❌ Update failed: local modifications detected. Stash or reset first."
+    return 1
+  fi
+}
+
+# Silently checks for updates once per day on shell load.
+# Disable by setting WT_AUTOUPDATE=0 in your .zshrc.
+_wt_autoupdate() {
+  [[ "$WT_AUTOUPDATE" == "0" ]] && return 0
+
+  local stamp_dir="${XDG_CACHE_HOME:-$HOME/.cache}/wt"
+  local stamp_file="$stamp_dir/last_update"
+
+  if [[ -f "$stamp_file" ]]; then
+    local last_update=$(< "$stamp_file")
+    local now=$(date +%s)
+    (( now - ${last_update:-0} < 86400 )) && return 0
+  fi
+
+  # Write timestamp before spawning to prevent concurrent shell instances double-updating
+  mkdir -p "$stamp_dir"
+  date +%s >| "$stamp_file"
+
+  {
+    local result
+    result=$(_wt_update 2>/dev/null)
+    [[ "$result" == *"✅"* ]] && echo "✨ ${result##*✅ }"
+  } &!
+}
+
 _wt_version() {
   echo "wt version $WT_VERSION"
 }
@@ -557,12 +625,17 @@ Commands:
   wt done                Stage, commit, push, create PR (if needed),
                          merge PR, and cleanup worktree
 
+  wt update              Pull latest changes for the wt plugin itself
+
   wt version             Show version number
                          Alias: wt v
 
 Configuration:
   WT_DIR                 Where worktrees are created
                          Default: ~/coding/worktrees
+
+  WT_AUTOUPDATE          Auto-update check on shell load (default: 1)
+                         Set to 0 to disable: export WT_AUTOUPDATE=0
 
 Examples:
   wt n fix-auth          Create worktree for fix-auth branch
@@ -572,3 +645,5 @@ Examples:
   wt done                Merge and cleanup when finished
 EOF
 }
+
+_wt_autoupdate

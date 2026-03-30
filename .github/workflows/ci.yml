@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'wt.plugin.zsh'
+      - '_wt'
+      - 'install.sh'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'wt.plugin.zsh'
+      - '_wt'
+      - 'install.sh'
+      - '.github/workflows/**'
+
+jobs:
+  lint:
+    name: Shell Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint install.sh
+        run: shellcheck install.sh
+
+      - name: Check wt.plugin.zsh syntax
+        run: |
+          sudo apt-get install -y zsh
+          zsh --no-rcs -c "source wt.plugin.zsh" 2>&1 || true
+          zsh -n wt.plugin.zsh
+
+      - name: Check _wt completion syntax
+        run: zsh -n _wt
